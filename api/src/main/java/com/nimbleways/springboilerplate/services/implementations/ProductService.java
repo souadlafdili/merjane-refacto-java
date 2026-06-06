@@ -1,49 +1,79 @@
 package com.nimbleways.springboilerplate.services.implementations;
 
+import java.time.Clock;
 import java.time.LocalDate;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import com.nimbleways.springboilerplate.domain.product.ProductNotificationType;
+import com.nimbleways.springboilerplate.domain.product.ProductProcessingPolicy;
+import com.nimbleways.springboilerplate.domain.product.ProductProcessingResult;
 import com.nimbleways.springboilerplate.entities.Product;
 import com.nimbleways.springboilerplate.repositories.ProductRepository;
 
 @Service
 public class ProductService {
+    private final ProductRepository productRepository;
+    private final NotificationService notificationService;
+    private final ProductProcessingPolicy productProcessingPolicy;
+    private final Clock clock;
 
-    @Autowired
-    ProductRepository pr;
-
-    @Autowired
-    NotificationService ns;
+    public ProductService(ProductRepository productRepository, NotificationService notificationService,
+            ProductProcessingPolicy productProcessingPolicy, Clock clock) {
+        this.productRepository = productRepository;
+        this.notificationService = notificationService;
+        this.productProcessingPolicy = productProcessingPolicy;
+        this.clock = clock;
+    }
 
     public void notifyDelay(int leadTime, Product p) {
         p.setLeadTime(leadTime);
-        pr.save(p);
-        ns.sendDelayNotification(leadTime, p.getName());
+        productRepository.save(p);
+        notificationService.sendDelayNotification(leadTime, p.getName());
+    }
+
+    public void processProduct(Product product) {
+        ProductProcessingResult result = productProcessingPolicy.process(product, today());
+        if (result.shouldSave()) {
+            productRepository.save(product);
+        }
+        sendNotification(result.getNotificationType(), product);
     }
 
     public void handleSeasonalProduct(Product p) {
-        if (LocalDate.now().plusDays(p.getLeadTime()).isAfter(p.getSeasonEndDate())) {
-            ns.sendOutOfStockNotification(p.getName());
-            p.setAvailable(0);
-            pr.save(p);
-        } else if (p.getSeasonStartDate().isAfter(LocalDate.now())) {
-            ns.sendOutOfStockNotification(p.getName());
-            pr.save(p);
-        } else {
-            notifyDelay(p.getLeadTime(), p);
+        ProductProcessingResult result = productProcessingPolicy.process(p, today());
+        if (result.shouldSave()) {
+            productRepository.save(p);
         }
+        sendNotification(result.getNotificationType(), p);
     }
 
     public void handleExpiredProduct(Product p) {
-        if (p.getAvailable() > 0 && p.getExpiryDate().isAfter(LocalDate.now())) {
-            p.setAvailable(p.getAvailable() - 1);
-            pr.save(p);
-        } else {
-            ns.sendExpirationNotification(p.getName(), p.getExpiryDate());
-            p.setAvailable(0);
-            pr.save(p);
+        ProductProcessingResult result = productProcessingPolicy.process(p, today());
+        if (result.shouldSave()) {
+            productRepository.save(p);
         }
+        sendNotification(result.getNotificationType(), p);
+    }
+
+    private void sendNotification(ProductNotificationType notificationType, Product product) {
+        switch (notificationType) {
+            case DELAY:
+                notificationService.sendDelayNotification(product.getLeadTime(), product.getName());
+                break;
+            case OUT_OF_STOCK:
+                notificationService.sendOutOfStockNotification(product.getName());
+                break;
+            case EXPIRATION:
+                notificationService.sendExpirationNotification(product.getName(), product.getExpiryDate());
+                break;
+            case NONE:
+            default:
+                break;
+        }
+    }
+
+    private LocalDate today() {
+        return LocalDate.now(clock);
     }
 }
